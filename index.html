@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>자전거 국토종주 2026</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; font-family: 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif; }
+  body { display: flex; flex-direction: column; }
+
+  /* ---------- 상단 헤더 ---------- */
+  header { background: #1d3557; color: #fff; padding: 10px 16px; z-index: 1100; }
+  header h1 { font-size: 22px; display: inline-block; margin-right: 18px; }
+  .info { display: inline-flex; flex-wrap: wrap; gap: 4px 18px; font-size: 13.5px; vertical-align: middle; color: #dbe7f5; }
+  .info b { color: #ffd166; font-weight: 600; margin-right: 4px; }
+  .legend { margin-top: 7px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .chip { cursor: pointer; user-select: none; font-size: 12.5px; font-weight: 700; color: #fff;
+          padding: 2px 10px; border-radius: 12px; opacity: .95; border: 2px solid transparent; }
+  .chip.off { opacity: .35; }
+  .legend .hint { font-size: 11.5px; color: #a8c0dd; margin-left: 6px; }
+
+  /* ---------- 지도 ---------- */
+  #map { flex: 1; width: 100%; }
+  #notice { position: absolute; left: 10px; bottom: 10px; z-index: 1000; background: rgba(255,255,255,.92);
+            font-size: 12px; padding: 6px 10px; border-radius: 6px; box-shadow: 0 1px 4px rgba(0,0,0,.3);
+            max-width: 340px; display: none; }
+
+  /* ---------- 마커 공통 (0x0 앵커 + 절대배치 자식) ---------- */
+  .anchor { position: relative; width: 0; height: 0; }
+  .halo { text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 4px #fff, 1px 1px 2px #fff, -1px -1px 2px #fff; }
+
+  /* 날짜 라벨 */
+  .day-label { position: absolute; transform: translate(-50%, -130%); font-size: 17px; font-weight: 800;
+               white-space: nowrap; pointer-events: none; }
+
+  /* 인증센터 */
+  .center-marker { position: absolute; left: -8px; top: -8px; width: 16px; height: 16px; border-radius: 50%;
+                   background: #d00000; border: 2.5px solid #fff; box-shadow: 0 0 3px rgba(0,0,0,.6); }
+  .center-label { position: absolute; transform: translate(-50%, 9px); font-size: 11.5px; font-weight: 700;
+                  color: #9d0208; white-space: nowrap; pointer-events: none; }
+
+  /* 고개 */
+  .hill-marker { position: absolute; left: -9px; top: -14px; width: 0; height: 0; pointer-events: none;
+                 border-left: 9px solid transparent; border-right: 9px solid transparent; }
+  .hill-pass   { border-bottom: 15px solid #1b6b2f; }
+  .hill-detour { border-bottom: 15px solid #8d6e63; }
+  .hill-label  { position: absolute; transform: translate(-50%, -200%); font-size: 12px; font-weight: 800;
+                 white-space: nowrap; pointer-events: none; }
+  .hill-label.pass   { color: #1b6b2f; }
+  .hill-label.detour { color: #6d4c41; }
+
+  /* 사진 점 + 보조선 + 썸네일 */
+  .photo-dot { position: absolute; left: -4.5px; top: -4.5px; width: 9px; height: 9px; border-radius: 50%;
+               background: var(--c); border: 1.5px solid #fff; box-shadow: 0 0 2px rgba(0,0,0,.6); cursor: pointer; }
+  .thumbwrap { display: none; }
+  body.detail .thumbwrap { display: block; }
+  .leader { position: absolute; pointer-events: none; overflow: visible; }
+  .thumb { position: absolute; width: 64px; height: 64px; border-radius: 6px; object-fit: cover; cursor: pointer;
+           border: 2.5px solid var(--c); background: #eee; box-shadow: 0 1px 5px rgba(0,0,0,.45);
+           transition: transform .12s; }
+  .thumb:hover { transform: scale(1.9); z-index: 9999 !important; }
+
+  @media (max-width: 640px) {
+    header h1 { font-size: 18px; display: block; margin-bottom: 4px; }
+    .info { font-size: 12px; gap: 2px 12px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1 id="t-title"></h1>
+  <span class="info">
+    <span><b>기간</b><span id="t-period"></span></span>
+    <span><b>실제 주행거리</b><span id="t-dist"></span></span>
+    <span><b>자전거</b><span id="t-bike"></span></span>
+  </span>
+  <div class="legend" id="legend"></div>
+</header>
+
+<div id="map"></div>
+<div id="notice"></div>
+
+<script src="data.js"></script>
+<script>
+'use strict';
+
+/* ===================== 지도 어댑터 =====================
+   CONFIG.kakaoAppKey 가 있으면 카카오지도, 없으면 Leaflet(OSM) */
+
+class KakaoAdapter {
+  init(cb) {
+    const s = document.createElement('script');
+    s.src = 'https://dapi.kakao.com/v2/maps/sdk.js?appkey=' + CONFIG.kakaoAppKey + '&autoload=false';
+    s.onload = () => kakao.maps.load(() => {
+      this.map = new kakao.maps.Map(document.getElementById('map'),
+        { center: new kakao.maps.LatLng(36.4, 127.8), level: 13 });
+      kakao.maps.event.addListener(this.map, 'zoom_changed', () => this._zoomCb && this._zoomCb());
+      cb();
+    });
+    s.onerror = () => { showNotice('카카오지도 로드 실패 → OSM 지도로 대체합니다. (키/도메인 등록 확인)'); loadLeaflet(); };
+    document.head.appendChild(s);
+  }
+  isDetail() { return this.map.getLevel() <= 8; }
+  setView(lat, lng, z) { this.map.setLevel(z); this.map.setCenter(new kakao.maps.LatLng(lat, lng)); }
+  fitBounds(pts) {
+    const b = new kakao.maps.LatLngBounds();
+    pts.forEach(p => b.extend(new kakao.maps.LatLng(p.lat, p.lng)));
+    this.map.setBounds(b);
+  }
+  addLine(path, color, width, opacity) {
+    const line = new kakao.maps.Polyline({
+      map: this.map, strokeWeight: width, strokeColor: color, strokeOpacity: opacity,
+      strokeStyle: 'solid',
+      path: path.map(p => new kakao.maps.LatLng(p.lat, p.lng)),
+    });
+    return { setVisible: v => line.setMap(v ? this.map : null) };
+  }
+  addHtml(lat, lng, el, z) {
+    const ov = new kakao.maps.CustomOverlay({
+      map: this.map, position: new kakao.maps.LatLng(lat, lng),
+      content: el, xAnchor: 0, yAnchor: 0, zIndex: z || 1, clickable: true,
+    });
+    return { setVisible: v => ov.setMap(v ? this.map : null) };
+  }
+  onZoom(cb) { this._zoomCb = cb; }
+}
+
+class LeafletAdapter {
+  init(cb) {
+    this.map = L.map('map').setView([36.4, 127.8], 7);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+      { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(this.map);
+    this.map.on('zoomend', () => this._zoomCb && this._zoomCb());
+    cb();
+  }
+  isDetail() { return this.map.getZoom() >= 11; }
+  setView(lat, lng, z) { this.map.setView([lat, lng], z); }
+  fitBounds(pts) { this.map.fitBounds(pts.map(p => [p.lat, p.lng]), { padding: [30, 30] }); }
+  addLine(path, color, width, opacity) {
+    const line = L.polyline(path.map(p => [p.lat, p.lng]),
+      { color, weight: width, opacity }).addTo(this.map);
+    return { setVisible: v => v ? line.addTo(this.map) : line.remove() };
+  }
+  addHtml(lat, lng, el, z) {
+    const m = L.marker([lat, lng], {
+      icon: L.divIcon({ html: el, className: '', iconSize: [0, 0] }),
+      interactive: false, zIndexOffset: (z || 1) * 10,
+    }).addTo(this.map);
+    return { setVisible: v => v ? m.addTo(this.map) : m.remove() };
+  }
+  onZoom(cb) { this._zoomCb = cb; }
+}
+
+function loadLeaflet() {
+  const css = document.createElement('link');
+  css.rel = 'stylesheet'; css.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+  document.head.appendChild(css);
+  const s = document.createElement('script');
+  s.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+  s.onload = () => start(new LeafletAdapter());
+  document.head.appendChild(s);
+}
+
+function showNotice(msg) {
+  const n = document.getElementById('notice');
+  n.textContent = msg; n.style.display = 'block';
+}
+
+/* ===================== 유틸 ===================== */
+
+function el(html) {
+  const d = document.createElement('div');
+  d.innerHTML = html.trim();
+  return d.firstChild;
+}
+
+// 경로 길이 기준 중간 지점 (날짜 라벨 위치용)
+function midpointOf(path) {
+  if (path.length === 1) return path[0];
+  const d = (a, b) => Math.hypot(a.lat - b.lat, (a.lng - b.lng) * 0.8);
+  let total = 0;
+  for (let i = 1; i < path.length; i++) total += d(path[i-1], path[i]);
+  let acc = 0;
+  for (let i = 1; i < path.length; i++) {
+    const seg = d(path[i-1], path[i]);
+    if (acc + seg >= total / 2) {
+      const r = (total / 2 - acc) / (seg || 1);
+      return { lat: path[i-1].lat + (path[i].lat - path[i-1].lat) * r,
+               lng: path[i-1].lng + (path[i].lng - path[i-1].lng) * r };
+    }
+    acc += seg;
+  }
+  return path[Math.floor(path.length / 2)];
+}
+
+const openPhoto = f => window.open('photos/web/' + f + '.webp', '_blank');
+
+/* ===================== 렌더링 ===================== */
+
+function start(A) {
+  A.init(() => {
+    // --- 날짜별 경로 + 라벨 + 사진 ---
+    const DIRS = [[1,-1],[1,1],[-1,1],[-1,-1],[1,0],[0,1],[-1,0],[0,-1]];
+    const OFFSET = 58;
+    let gi = 0;
+
+    DAYS.forEach(day => {
+      const handles = [];
+      handles.push(A.addLine(day.path, day.color, 6, 0.75));
+
+      const mid = midpointOf(day.path);
+      handles.push(A.addHtml(mid.lat, mid.lng, el(
+        `<div class="anchor"><div class="day-label halo" style="color:${day.color}">${day.date}</div></div>`
+      ), 300));
+
+      day.photos.forEach(p => {
+        const [dx, dy] = DIRS[gi % DIRS.length].map(v => v * OFFSET);
+        gi++;
+        const w = el(`<div class="anchor" style="--c:${day.color}">
+          <div class="photo-dot" title="${day.date} ${p.t}"></div>
+          <div class="thumbwrap">
+            <svg class="leader" width="1" height="1">
+              <line x1="0" y1="0" x2="${dx}" y2="${dy}" stroke="${day.color}" stroke-width="1.5" opacity="0.8"/>
+            </svg>
+            <img class="thumb" loading="lazy" src="photos/thumb/${p.f}.webp"
+                 style="left:${dx - 32}px; top:${dy - 32}px" title="${day.date} ${p.t} — 클릭하면 원본">
+          </div>
+        </div>`);
+        w.querySelector('.photo-dot').onclick = () => openPhoto(p.f);
+        w.querySelector('.thumb').onclick = () => openPhoto(p.f);
+        handles.push(A.addHtml(p.lat, p.lng, w, 100 + (gi % 8)));
+      });
+
+      // 범례 칩 (날짜 토글)
+      const chip = el(`<span class="chip" style="background:${day.color}">${day.date}</span>`);
+      let on = true;
+      chip.onclick = () => { on = !on; chip.classList.toggle('off', !on); handles.forEach(h => h.setVisible(on)); };
+      document.getElementById('legend').appendChild(chip);
+    });
+
+    document.getElementById('legend').appendChild(
+      el(`<span class="hint">날짜를 누르면 구간 표시/숨김 · 지도를 확대하면 사진 썸네일이 나타납니다</span>`));
+
+    // --- 인증센터 26개 ---
+    CENTERS.forEach(c => {
+      A.addHtml(c.lat, c.lng, el(`<div class="anchor">
+        <div class="center-marker" title="${c.no}. ${c.name} 인증센터"></div>
+        <div class="center-label halo">${c.name}</div>
+      </div>`), 200);
+    });
+
+    // --- 고개 ---
+    HILLS.forEach(h => {
+      const pass = h.status === '통과';
+      A.addHtml(h.lat, h.lng, el(`<div class="anchor">
+        <div class="hill-marker ${pass ? 'hill-pass' : 'hill-detour'}"></div>
+        <div class="hill-label halo ${pass ? 'pass' : 'detour'}">${h.name}(${h.status})</div>
+      </div>`), 250);
+    });
+
+    // --- 초기 화면: 전체 경로 (URL에 ?lat=..&lng=..&z=.. 가 있으면 해당 위치) ---
+    const q = new URLSearchParams(location.search);
+    if (q.get('z')) A.setView(+q.get('lat'), +q.get('lng'), +q.get('z'));
+    else A.fitBounds(DAYS.flatMap(d => d.path));
+
+    // --- 줌에 따른 썸네일 표시 ---
+    const updateZoom = () => document.body.classList.toggle('detail', A.isDetail());
+    A.onZoom(updateZoom);
+    updateZoom();
+  });
+}
+
+/* ===================== 시작 ===================== */
+document.title = CONFIG.title;
+document.getElementById('t-title').textContent = CONFIG.title;
+document.getElementById('t-period').textContent = CONFIG.period;
+document.getElementById('t-dist').textContent = CONFIG.distanceKm + ' km';
+document.getElementById('t-bike').textContent = CONFIG.bike;
+
+if (CONFIG.kakaoAppKey) {
+  start(new KakaoAdapter());
+} else {
+  showNotice('카카오 지도 키가 설정되지 않아 OpenStreetMap으로 표시 중입니다. data.js의 kakaoAppKey에 키를 넣으면 카카오지도로 전환됩니다.');
+  loadLeaflet();
+}
+</script>
+</body>
+</html>
