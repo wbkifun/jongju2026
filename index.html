@@ -176,25 +176,6 @@ function el(html) {
   return d.firstChild;
 }
 
-// 경로 길이 기준 중간 지점 (날짜 라벨 위치용)
-function midpointOf(path) {
-  if (path.length === 1) return path[0];
-  const d = (a, b) => Math.hypot(a.lat - b.lat, (a.lng - b.lng) * 0.8);
-  let total = 0;
-  for (let i = 1; i < path.length; i++) total += d(path[i-1], path[i]);
-  let acc = 0;
-  for (let i = 1; i < path.length; i++) {
-    const seg = d(path[i-1], path[i]);
-    if (acc + seg >= total / 2) {
-      const r = (total / 2 - acc) / (seg || 1);
-      return { lat: path[i-1].lat + (path[i].lat - path[i-1].lat) * r,
-               lng: path[i-1].lng + (path[i].lng - path[i-1].lng) * r };
-    }
-    acc += seg;
-  }
-  return path[Math.floor(path.length / 2)];
-}
-
 const openPhoto = f => window.open('photos/web/' + f + '.webp', '_blank');
 
 /* ===================== 렌더링 ===================== */
@@ -208,9 +189,9 @@ function start(A) {
 
     DAYS.forEach(day => {
       const handles = [];
-      handles.push(A.addLine(day.path, day.color, 6, 0.75));
+      day.paths.forEach(seg => handles.push(A.addLine(seg, day.color, 6, 0.75)));
 
-      const mid = midpointOf(day.path);
+      const mid = day.labelAt;
       handles.push(A.addHtml(mid.lat, mid.lng, el(
         `<div class="anchor"><div class="day-label halo" style="color:${day.color}">${day.date}</div></div>`
       ), 300));
@@ -234,7 +215,7 @@ function start(A) {
       });
 
       // 범례 칩 (날짜 토글)
-      const chip = el(`<span class="chip" style="background:${day.color}">${day.date}</span>`);
+      const chip = el(`<span class="chip" style="background:${day.color}" title="${day.km} km">${day.date}</span>`);
       let on = true;
       chip.onclick = () => { on = !on; chip.classList.toggle('off', !on); handles.forEach(h => h.setVisible(on)); };
       document.getElementById('legend').appendChild(chip);
@@ -263,7 +244,7 @@ function start(A) {
     // --- 초기 화면: 전체 경로 (URL에 ?lat=..&lng=..&z=.. 가 있으면 해당 위치) ---
     const q = new URLSearchParams(location.search);
     if (q.get('z')) A.setView(+q.get('lat'), +q.get('lng'), +q.get('z'));
-    else A.fitBounds(DAYS.flatMap(d => d.path));
+    else A.fitBounds(DAYS.flatMap(d => d.paths.flat()));
 
     // --- 줌에 따른 썸네일 표시 ---
     const updateZoom = () => document.body.classList.toggle('detail', A.isDetail());
