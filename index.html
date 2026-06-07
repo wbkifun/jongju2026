@@ -107,7 +107,7 @@ class KakaoAdapter {
     s.onerror = () => { showNotice('카카오지도 로드 실패 → OSM 지도로 대체합니다. (키/도메인 등록 확인)'); loadLeaflet(); };
     document.head.appendChild(s);
   }
-  isDetail() { return this.map.getLevel() <= 8; }
+  isDetail() { return this.map.getLevel() <= 10; }
   setView(lat, lng, z) { this.map.setLevel(z); this.map.setCenter(new kakao.maps.LatLng(lat, lng)); }
   fitBounds(pts) {
     const b = new kakao.maps.LatLngBounds();
@@ -140,7 +140,7 @@ class LeafletAdapter {
     this.map.on('zoomend', () => this._zoomCb && this._zoomCb());
     cb();
   }
-  isDetail() { return this.map.getZoom() >= 11; }
+  isDetail() { return this.map.getZoom() >= 9; }
   setView(lat, lng, z) { this.map.setView([lat, lng], z); }
   fitBounds(pts) { this.map.fitBounds(pts.map(p => [p.lat, p.lng]), { padding: [30, 30] }); }
   addLine(path, color, width, opacity) {

@@ -13,9 +13,24 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))          # 2026.06_자전거_국토종주/
 SITE = os.path.dirname(HERE)                           # site/
 
-DIST_TOTAL = None         # None이면 GPX 보정 합계(집 왕복 포함)로 자동 계산
+DIST_TOTAL = None         # None이면 GPX 보정 합계로 자동 계산
+
+# ---------- GPX 편집 규칙 ----------
+HABSUBU = (37.5537, 126.8781)        # 안양천 합수부
+EXCLUDE_FILES = {'양산물문화관_스시하츠.gpx'}        # 6.5 양산시내 왕복 제거
+CUTS = [  # (파일, 'before'|'after', 기준점): 기준점 최근접 이전/이후 점들 삭제
+    ('아라서해갑문_인증센터.gpx', 'before', HABSUBU),   # 5.29 안양천 구간 제거
+    ('아라한강갑문_집.gpx',       'after',  HABSUBU),   # 5.29 합수부에서 종료
+    ('집_여의도_인증센터.gpx',    'before', HABSUBU),   # 6.1 합수부부터 시작
+    ('낙동강하굿둑_인증센터.gpx', 'before', (35.31554, 128.97439)),  # 6.5 양산시내 제거, 황산공원부터
+]
+BAD_BOXES = [  # (lat_min, lat_max, lng_min, lng_max): GPS 오류 점 제거
+    (37.5615, 37.60, 126.866, 126.876),   # 난지한강공원 서측 노이즈
+    (37.5560, 37.60, 126.876, 126.887),   # 난지/성산대교 북단 노이즈
+    (37.5530, 37.60, 126.887, 126.900),   # 망원 측 노이즈
+]
+SPLICE = {'달성보_합천창녕보.gpx': 'gap64_달성보_원오교.json'}  # 일시멈춤 누락 구간 삽입
 KAKAO_KEY = '875c4a314de2705aafb51d65a743dd49'
-HOME_MASK_KM = 2.0        # 집 반경 마스킹
 COLORS = ['#d62828', '#f77f00', '#2e9e44', '#0077e6', '#8338ec', '#e0218a']
 WD = ['월', '화', '수', '목', '금', '토', '일']
 
@@ -56,26 +71,39 @@ def parse_gpx(f):
         start = (T[0] + datetime.timedelta(hours=9)).replace(tzinfo=None)
     else:  # 타임스탬프 깨진 파일: mtime - 80분으로 시각 추정
         start = datetime.datetime.fromtimestamp(os.path.getmtime(f)) - datetime.timedelta(minutes=80)
-    # GPS 점프 처리: 거리는 쌍별로 점프 구간만 제외, 경로점은 진동(1km 미만 점프)만 버림
-    clean, dist = [P[0]], 0
+    base = os.path.basename(f)
+    # 일시멈춤 누락 구간 삽입 (가장 큰 갭 위치에)
+    if base in SPLICE:
+        gap = json.load(open(os.path.join(HERE, SPLICE[base])))['pts']
+        gi = max(range(1, len(P)), key=lambda i: hav(P[i-1], P[i]))
+        n = len(gap)
+        Tg = [T[gi-1] + (T[gi]-T[gi-1]) * (k+1)/(n+1) for k in range(n)]
+        P = P[:gi] + [(a, b) for a, b in gap] + P[gi:]
+        T = T[:gi] + Tg + T[gi:]
+    # GPS 점프 처리: 진동(1km 미만 점프) 점 버림, 1km 이상 진짜 갭은 유지(세그먼트 분리)
+    clean = [P[0]]
     for i in range(1, len(P)):
         d = hav(P[i-1], P[i])
         dt = (T[i] - T[i-1]).total_seconds() if valid else 1
         jump = d > 0.5 or (dt > 0 and d*1000/dt > 25 and d > 0.05)
-        if not jump:
-            dist += d
         if jump and hav(clean[-1], P[i]) < 1.0:
-            continue   # 진동/노이즈 점 버림 (1km 이상 떨어진 진짜 갭은 유지 → 세그먼트 분리됨)
+            continue
         clean.append(P[i])
-    return {'file': os.path.basename(f), 'pts': clean, 'km': dist, 'start': start}
+    # GPS 오류 영역 점 제거
+    clean = [p for p in clean
+             if not any(b[0] < p[0] < b[1] and b[2] < p[1] < b[3] for b in BAD_BOXES)]
+    # 트림 (기준점 최근접 이전/이후 삭제)
+    for fn, side, ref in CUTS:
+        if fn == base and clean:
+            ci = min(range(len(clean)), key=lambda i: hav(clean[i], ref))
+            clean = clean[ci:] if side == 'before' else clean[:ci+1]
+    # 거리: 최종 점 기준 쌍별 합 (500m 초과 갭 제외)
+    dist = sum(d for d in (hav(clean[i-1], clean[i]) for i in range(1, len(clean))) if d <= 0.5)
+    return {'file': base, 'pts': clean, 'km': dist, 'start': start}
 
-tracks = [parse_gpx(f) for f in sorted(glob.glob(os.path.join(ROOT, 'gpx', '*.gpx')))]
+tracks = [parse_gpx(f) for f in sorted(glob.glob(os.path.join(ROOT, 'gpx', '*.gpx')))
+          if os.path.basename(f) not in EXCLUDE_FILES]
 tracks.sort(key=lambda t: t['start'])
-
-# 집 위치(집_여의도 트랙 시작점) 반경 마스킹
-home = next(t for t in tracks if t['file'].startswith('집_'))['pts'][0]
-for t in tracks:
-    t['pts'] = [p for p in t['pts'] if hav(p, home) > HOME_MASK_KM]
 
 # ---------- 3. Douglas-Peucker 단순화 ----------
 def dp(pts, tol):
